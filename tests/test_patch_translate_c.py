@@ -65,11 +65,10 @@ fn addNativeAudioDependencies(
     target: std.Build.ResolvedTarget,
     macos_sdk_path: ?[]const u8,
 ) void {
-    addMiniaudioShim(b, module, target, macos_sdk_path);
-    addImageShim(b, module, target, macos_sdk_path);
+    _ = macos_sdk_path;
 
     switch (target.result.os.tag) {
-        .macos => addMacOSSystemLibraries(b, module, macos_sdk_path.?),
+        .macos => {},
         .linux => {
             module.linkSystemLibrary("dl", .{});
             module.linkSystemLibrary("pthread", .{});
@@ -77,6 +76,45 @@ fn addNativeAudioDependencies(
         },
         else => {},
     }
+}
+
+const LIB_NAME = "opentui";
+const ROOT_SOURCE_FILE = "src/opentui.zig";
+
+fn applyDependencies(
+    b: *std.Build,
+    module: *std.Build.Module,
+    optimize: std.builtin.OptimizeMode,
+    target: std.Build.ResolvedTarget,
+    build_options: *std.Build.Step.Options,
+) void {
+    _ = b;
+    _ = module;
+    _ = optimize;
+    _ = target;
+    _ = build_options;
+}
+
+fn buildTarget(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    build_options: *std.Build.Step.Options,
+) !void {
+    const module = b.createModule(.{
+        .root_source_file = b.path(ROOT_SOURCE_FILE),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    applyDependencies(b, module, optimize, target, build_options);
+
+    const lib = b.addLibrary(.{
+        .name = LIB_NAME,
+        .root_module = module,
+        .linkage = .dynamic,
+    });
+    _ = lib;
 }
 """
 
@@ -109,6 +147,9 @@ class PatchTranslateC(unittest.TestCase):
             self.assertIn('"ndk-include"', out)
             self.assertIn('"ndk-arch-include"', out)
             self.assertIn('"ndk-lib"', out)
+            self.assertIn('"bionic-compat-c"', out)
+            self.assertIn("addAndroidBionicCompat(b, module)", out)
+            self.assertIn("addCSourceFile", out)
             self.assertIn("b.option", out)
             self.assertIn("brave_ndk_include_paths", out, "las opciones deben leerse una sola vez")
             self.assertIn("if (brave_ndk_include_paths == null)", out)
@@ -190,6 +231,8 @@ class PatchTranslateC(unittest.TestCase):
             "    });\n"
             "    addAndroidNdkLibraryPath(b, mod);\n"
             "    addAndroidNdkLibraryPath(b, mod);\n"
+            "    addAndroidBionicCompat(b, mod);\n"
+            "    addAndroidBionicCompat(b, mod);\n"
             "}\n"
         )
         with tempfile.TemporaryDirectory() as tmp:
@@ -199,19 +242,7 @@ class PatchTranslateC(unittest.TestCase):
             f = tmp_path / "build.zig"
             f.write_text(FIXTURE)
             self.assertEqual(run_patcher(f).returncode, 0)
-            # el fixture trae llamadas a helpers de OpenTUI que no definimos:
-            # fuera, para que el build.zig de prueba compile aislado
-            text = f.read_text()
-            text = text.replace(
-                "    addMiniaudioShim(b, module, target, macos_sdk_path);\n",
-                "    _ = macos_sdk_path;\n",
-            )
-            for line in (
-                "    addImageShim(b, module, target, macos_sdk_path);\n",
-                "        .macos => addMacOSSystemLibraries(b, module, macos_sdk_path.?),\n",
-            ):
-                text = text.replace(line, "")
-            f.write_text(text + build_main)
+            f.write_text(f.read_text() + build_main)
             p = subprocess.run(
                 [
                     zig,
@@ -219,6 +250,7 @@ class PatchTranslateC(unittest.TestCase):
                     "-Dndk-include=/tmp/include",
                     "-Dndk-arch-include=/tmp/arch",
                     "-Dndk-lib=/tmp/lib",
+                    f"-Dbionic-compat-c={tmp_path / 'foo.c'}",
                 ],
                 cwd=tmp,
                 capture_output=True,

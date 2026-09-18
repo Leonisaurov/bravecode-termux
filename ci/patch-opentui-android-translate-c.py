@@ -20,7 +20,11 @@ Parche (sólo cuando el target es Android):
   * los dos translate-c reciben `-Dndk-include` / `-Dndk-arch-include` y las
     tres macros de nullability anuladas;
   * el módulo recibe `-Dndk-lib` como library path y se linkea sólo `m`
-    (nada de `dl`/`pthread`).
+    (nada de `dl`/`pthread`);
+  * el módulo incluye además el .c de `-Dbionic-compat-c`
+    (`ci/bionic-compat.c`), que define `pthread_tryjoin_np`: Zig 0.16 emite esa
+    llamada de glibc para linux-android y Bionic no la tiene, así que dlopen
+    fallaba en el device con "cannot locate symbol".
 
 Opciones del build y no variables de entorno porque en Zig 0.16
 `std.process.getEnvVarOwned` (y `std.posix.getenv`) no existen. Las opciones se
@@ -78,6 +82,24 @@ ANCHOR_B_PATCHED = (
     "        },\n"
 )
 
+# --- transformación C: shims de símbolos que Bionic no tiene ----------------
+ANCHOR_C = (
+    "    applyDependencies(b, module, optimize, target, build_options);\n"
+    "\n"
+    "    const lib = b.addLibrary(.{\n"
+    '        .name = LIB_NAME,\n'
+)
+ANCHOR_C_PATCHED = (
+    "    applyDependencies(b, module, optimize, target, build_options);\n"
+    "\n"
+    "    if (target.result.abi == .android) {\n"
+    "        addAndroidBionicCompat(b, module);\n"
+    "    }\n"
+    "\n"
+    "    const lib = b.addLibrary(.{\n"
+    '        .name = LIB_NAME,\n'
+)
+
 HELPER = f"""
 {BEGIN}
 // Ajustes para compilar OpenTUI en Android/Bionic. Generado por
@@ -92,6 +114,7 @@ HELPER = f"""
 //   veces y estas funciones se llaman una vez por paso/módulo.
 var brave_ndk_include_paths: ?[][]const u8 = null;
 var brave_ndk_lib_dir: ?[]const u8 = null;
+var brave_bionic_compat_c: ?[]const u8 = null;
 
 fn addAndroidNdkIncludes(b: *std.Build, step: *std.Build.Step.TranslateC) void {{
     if (brave_ndk_include_paths == null) {{
@@ -118,6 +141,14 @@ fn addAndroidNdkLibraryPath(b: *std.Build, module: *std.Build.Module) void {{
     if (brave_ndk_lib_dir.?.len > 0) {{
         module.addLibraryPath(.{{ .cwd_relative = brave_ndk_lib_dir.? }});
     }}
+}}
+
+fn addAndroidBionicCompat(b: *std.Build, module: *std.Build.Module) void {{
+    if (brave_bionic_compat_c == null) {{
+        brave_bionic_compat_c = b.option([]const u8, "bionic-compat-c", "Ruta del .c con shims de símbolos que Bionic no tiene") orelse "";
+    }}
+    if (brave_bionic_compat_c.?.len == 0) return;
+    module.addCSourceFile(.{{ .file = .{{ .cwd_relative = brave_bionic_compat_c.? }}, .flags = &.{{}} }});
 }}
 {END}
 """
@@ -157,6 +188,7 @@ def patch(path: pathlib.Path) -> str:
     cleaned, replaced_helper = _strip_previous(text)
     cleaned = _apply(cleaned, ANCHOR_A, ANCHOR_A_PATCHED, "translate-c", path)
     cleaned = _apply(cleaned, ANCHOR_B, ANCHOR_B_PATCHED, "link de sistema", path)
+    cleaned = _apply(cleaned, ANCHOR_C, ANCHOR_C_PATCHED, "compat de Bionic", path)
 
     result = cleaned.rstrip("\n") + "\n" + HELPER.lstrip("\n")
     path.write_text(result)

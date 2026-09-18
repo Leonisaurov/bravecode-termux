@@ -30,21 +30,33 @@ def tmux(*args, timeout=30):
     return subprocess.run([TMUX, *args], capture_output=True, text=True, timeout=timeout)
 
 
+def find_ndk_lib_dir():
+    roots = sorted((pathlib.Path.home() / "Android" / "ndk").glob("*"), reverse=True)
+    for root in roots:
+        for prebuilt in (root / "toolchains" / "llvm" / "prebuilt").glob("*/sysroot/usr/lib/aarch64-linux-android"):
+            d = prebuilt / "24"
+            if (d / "libc.so").exists():
+                return d
+    return None
+
+
 class TuiSmoke(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         if not PLATFORM_LIB.exists():
             raise unittest.SkipTest("lib nativa no instalada (install.sh --native --patch)")
-        # Sólo tiene sentido probar la TUI con la lib Android: si en
-        # node_modules sigue la .so glibc del paquete, bun:ffi no puede cargarla.
-        r = subprocess.run(
-            ["bash", str(ROOT / "ci" / "verify-libopentui.sh"), str(PLATFORM_LIB)],
-            capture_output=True,
-            text=True,
-        )
+        # Sólo tiene sentido probar la TUI con la lib Android completa: si en
+        # node_modules sigue la .so glibc del paquete, o le faltan símbolos que
+        # Bionic no tiene (pthread_tryjoin_np), dlopen falla.
+        ndk_lib = find_ndk_lib_dir()
+        cmd = ["bash", str(ROOT / "ci" / "verify-libopentui.sh"), str(PLATFORM_LIB)]
+        if ndk_lib:
+            cmd += ["--ndk-lib", str(ndk_lib)]
+        r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:
             raise unittest.SkipTest(
-                f"la lib aplicada no es la de Android todavía ({r.stdout.strip().splitlines()[-1] if r.stdout.strip() else r.returncode})"
+                f"la lib aplicada no está lista para el device todavía (exit {r.returncode}: "
+                f"{(r.stderr or r.stdout).strip().splitlines()[-1][:100]})"
             )
 
     def tearDown(self):

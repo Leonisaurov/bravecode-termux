@@ -130,6 +130,9 @@ cmd_patch() {
     log "verificando contrato de la lib (ELF AArch64 + NEEDED libc.so + símbolos FFI)"
     bash "$VERIFY" "$NATIVE_LIB"
     [ -d "$PLATFORM_PKG_DIR" ] || die "falta $PLATFORM_PKG_DIR; ejecuta antes ./install.sh --deps"
+    # rm antes de cp: bun enlaza node_modules al cache con hardlinks, y escribir
+    # encima del destino modificaría el archivo del cache (contaminándolo).
+    rm -f "$PLATFORM_LIB"
     cp -f "$NATIVE_LIB" "$PLATFORM_LIB"
     cmp -s "$NATIVE_LIB" "$PLATFORM_LIB" || die "la copia a node_modules no quedó idéntica"
     log "TUI habilitada: $PLATFORM_LIB usa la lib Android"

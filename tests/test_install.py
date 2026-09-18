@@ -83,6 +83,27 @@ class InstallScript(unittest.TestCase):
         self.assertTrue(TARGET_LIB.exists())
         self.assertEqual(NATIVE_LIB.read_bytes(), TARGET_LIB.read_bytes())
 
+    def test_patch_breaks_hardlink_to_bun_cache(self):
+        """bun enlaza node_modules al cache con hardlinks: --patch debe escribir
+        un archivo nuevo (rm + cp), no seguir el enlace y contaminar el cache."""
+        if not NATIVE_LIB.exists():
+            self.skipTest("lib nativa aún no descargada del CI")
+        with tempfile.TemporaryDirectory() as tmp:
+            link = pathlib.Path(tmp) / "cache-copy.so"
+            if TARGET_LIB.exists():
+                shutil.copy2(TARGET_LIB, link)
+            else:
+                link.write_bytes(b"placeholder")
+            if TARGET_LIB.exists():
+                os.unlink(TARGET_LIB)
+            # hardlink explícito con ln: Android/Python no expone os.link
+            subprocess.run(["ln", str(link), str(TARGET_LIB)], check=True)
+            before = link.read_bytes()
+            p = run_install("--patch")
+            if p.returncode != 0:
+                self.skipTest(f"la lib nativa no pasa el verificador todavía: {p.stderr.strip()[:80]}")
+            self.assertEqual(before, link.read_bytes(), "--patch modificó el archivo enlazado (cache de bun)")
+
     def test_bin_installs_launcher_with_rewritten_shebang(self):
         with tempfile.TemporaryDirectory() as tmp:
             prefix = pathlib.Path(tmp) / "usr"

@@ -148,6 +148,7 @@ log "zig build (release, target $OPENTUI_TARGET)"
     -Dndk-include="$NDK_INCLUDE" \
     -Dndk-arch-include="$NDK_ARCH_INCLUDE" \
     -Dndk-lib="$NDK_LIB" \
+    -Dbionic-compat-c="$REPO_ROOT/ci/bionic-compat.c" \
     --libc "$LIBC_FILE" \
     --prefix "$PREFIX" \
     --cache-dir "$ZIG_LOCAL_CACHE_DIR" \
@@ -164,5 +165,5 @@ cp -f "$BUILT" "$OUT_LIB"
 log "artefacto: $OUT_LIB ($(du -h "$OUT_LIB" | cut -f1))"
 
 # --- 5. verificación de contrato (AArch64 DYN + NEEDED libc.so + 397 símbolos FFI)
-bash "$REPO_ROOT/ci/verify-libopentui.sh" "$OUT_LIB"
+bash "$REPO_ROOT/ci/verify-libopentui.sh" "$OUT_LIB" --ndk-lib "$NDK_LIB"
 readelf -h "$OUT_LIB" | grep -E 'Class|Machine|Type' | sed 's/^/  /'
