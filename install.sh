@@ -115,7 +115,8 @@ cmd_native() {
         --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)"
     [ -n "$run_id" ] || die "no hay runs correctos de $WORKFLOW_FILE en $GH_REPO"
     log "descargando artefacto '$ARTIFACT_NAME' del run $run_id"
-    rm -f "$NATIVE_LIB"
+    # limpiar restos de una descarga previa: gh no sobrescribe al extraer
+    rm -f "$NATIVE_LIB" "$NATIVE_DIR/SHA256SUMS"
     gh run download "$run_id" --repo "$GH_REPO" -n "$ARTIFACT_NAME" -D "$NATIVE_DIR"
     [ -f "$NATIVE_LIB" ] || die "el artefacto no traía $(basename "$NATIVE_LIB")"
     if [ -f "$NATIVE_DIR/SHA256SUMS" ]; then
@@ -130,8 +131,9 @@ cmd_patch() {
     log "verificando contrato de la lib (ELF AArch64 + NEEDED libc.so + símbolos FFI)"
     bash "$VERIFY" "$NATIVE_LIB"
     [ -d "$PLATFORM_PKG_DIR" ] || die "falta $PLATFORM_PKG_DIR; ejecuta antes ./install.sh --deps"
-    # rm antes de cp: bun enlaza node_modules al cache con hardlinks, y escribir
-    # encima del destino modificaría el archivo del cache (contaminándolo).
+    # rm antes de cp: bun enlaza los archivos de node_modules al cache con
+    # symlinks, y `cp -f` escribiría a través del enlace, modificando el archivo
+    # del cache (visto: el cache quedó con la lib Android dentro).
     rm -f "$PLATFORM_LIB"
     cp -f "$NATIVE_LIB" "$PLATFORM_LIB"
     cmp -s "$NATIVE_LIB" "$PLATFORM_LIB" || die "la copia a node_modules no quedó idéntica"

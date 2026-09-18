@@ -3,21 +3,21 @@
 ## Qué es esto
 
 Port de `bravecode-cli` (paquete npm, "BraveCode AI") a Termux/Android aarch64.
-Repo del port: `github.com/Leonisaurov/bravecode-termux` (el CI que compila la
-librería nativa vive ahí).
+Repo del port: `github.com/Leonisaurov/bravecode-termux` (ahí vive el CI que
+compila la librería nativa de OpenTUI para Android).
 
-## Estado actual
+## Estado actual — port completo y verificado
 
 | Pieza | Estado | Evidencia |
 |-------|--------|-----------|
 | CLI arranca en Termux | ✅ | `./bin/bravecode --version` → `0.1.57` (bun 1.3.14 bionic) |
 | Comandos no interactivos | ✅ | `models`, `providers`, `tools`, `agents`, `plugins`, `config` |
 | Prompt real (headless) | ✅ | `bravecode run "Responde únicamente con la palabra: ok"` → `ok` |
-| Shim de plataforma | ✅ | `runtime/platform-shim.cjs` (test: platform=linux, arch=arm64) |
-| Deps JS | ✅ | `bun install --ignore-scripts` en `app/` (154 paquetes) |
-| Lib nativa Android (0.5.9) | ⏳ | CI `build-opentui-android.yml` (repo del port) |
-| TUI en tmux | ⏳ | depende de la lib nativa |
-| Tests | ✅ | `python3 tests/run-tests.py` (29 tests, stdlib) |
+| Lib nativa Android 0.5.9 | ✅ | artefacto del CI (21.9 MB, sha256 `c7073882…`), verificado en el device |
+| TUI en tmux | ✅ | renderiza (banner, input, sidebar) y responde: prompt → `port ok` |
+| Shim de plataforma | ✅ | `runtime/platform-shim.cjs` (platform=linux, arch=arm64) |
+| Compat de eventos del Input | ✅ | `runtime/opentui-input-compat.cjs` (INPUT→CHANGE) |
+| Tests | ✅ | `python3 tests/run-tests.py` (38 tests, stdlib) |
 
 ## Cómo llegamos aquí (decisiones con evidencia)
 
@@ -39,10 +39,16 @@ librería nativa vive ahí).
    Zig está en `packages/native/` (no en `packages/core/src/zig`) y pide
    `.zig-version 0.16.0`; los deps zig (uucode/yoga/ghostty) se vendorizan con
    `src/vendor/update-zig-deps.sh` (descarga con SHA-256 verificado).
-5. **Decisiones de port**: shim mínimo de plataforma (no se parchea el bundle ni
-   el paquete npm) + inyección de la lib Android en
+5. **Decisiones de port**: shims mínimos (no se parchea el bundle ni el paquete
+   npm) + inyección de la lib Android en
    `@opentui/core-linux-arm64/libopentui.so` (lo que el preflight del CLI busca
    cuando la plataforma es `linux`).
+6. **Bug de la TUI encontrado midiendo**: `@opentui/core` 0.5.9 emite `INPUT`
+   por tecla y `CHANGE` sólo al confirmar; la TUI sincroniza su estado con
+   `onChange`, así que no se podía enviar nada (la paleta de `/` no abría y el
+   ENTER llegaba al renderable pero `doSubmit()` leía `value` vacío). Se aisló
+   con TestRenderer de OpenTUI (CHANGE×1 al teclear `abc`) y se arregló con un
+   shim que emite `CHANGE` en cada `INPUT`.
 
 ## Iteraciones del CI (todas verificadas en el runner)
 
@@ -53,17 +59,21 @@ librería nativa vive ahí).
 | 3 | `miniaudio.h: 'pthread.h' not found` (translate-c sin headers) | parche `ci/patch-opentui-android-translate-c.py` (includes del NDK) |
 | 4 | `build.zig: root source file struct 'process' has no member named 'getEnvVarOwned'` | opciones del build (`-Dndk-include`, `-Dndk-arch-include`) |
 | 5 | `panic: Option 'ndk-include' declared twice` | el helper cachea las rutas (se llama una vez por translate-c) |
-| 6 | `unable to find dynamic system library 'dl'/'pthread'/'m' ... searched paths: none` | en Android el módulo recibe el library path del NDK (`-Dndk-lib`) y se linkea sólo `m`; Bionic no tiene `libpthread`/`libdl` |
+| 6 | `unable to find dynamic system library 'dl'/'pthread'/'m' ... searched paths: none` | en Android el módulo recibe el library path del NDK (`-Dndk-lib`) y se linkea sólo `m` |
+| 7 | build verde, pero la TUI moría en `dlopen: cannot locate symbol "pthread_tryjoin_np"` | `ci/bionic-compat.c` define el símbolo dentro de la .so (`-Dbionic-compat-c`) |
 
-Diagnóstico previo hecho en local con el device (zig 0.16.0 + NDK r29): el
-translate-c de OpenTUI no hereda el `--libc`, y al apuntarlo al NDK aparece el
-error de nullability de `sys/time.h` (headers bionic con `_Nullable`), que se
-resuelve anulando esas macros. Ese par de hechos está fijado en los tests.
+Diagnósticos hechos en el device (zig 0.16.0 + NDK r29 local) antes de cada
+arreglo: el translate-c de OpenTUI no hereda el `--libc`; al apuntarlo al NDK
+aparece el error de nullability de `sys/time.h`; el link de Bionic no tiene
+`dl`/`pthread`; y de los 171 símbolos indefinidos de la .so **sólo**
+`pthread_tryjoin_np` faltaba en Bionic (medido contra las libs del NDK). Todo
+eso quedó fijado en tests.
 
-## Pendiente
+## Pendiente / siguientes pasos
 
-- Bajar el artefacto del CI (`./install.sh --native`), aplicarlo (`--patch`) y
-  verificar la TUI en tmux (`tests/test_tui.py`).
-- Probar una sesión real de la TUI con prompt (consume el servicio free de
-  terceros: `codero.sohailsyed.com`).
+- Uso real en el terminal del usuario (TUI interactiva con prompts del día a
+  día); el servicio free (`codero.sohailsyed.com`) es de terceros: para trabajo
+  serio, configurar un provider propio con `bravecode config`.
 - Opcional: `./install.sh --bin` para exponer `bravecode` en `$PREFIX/bin`.
+- ~~Revisar si el checksum del artefacto (`SHA256SUMS`) usa rutas relativas~~:
+  corregido en el workflow (se genera dentro de `native/`).

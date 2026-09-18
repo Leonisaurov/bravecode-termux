@@ -85,7 +85,10 @@ jobs:
       - name: Checksums and summary
         run: |
           set -euo pipefail
-          sha256sum native/libopentui.android-arm64.so | tee native/SHA256SUMS
+          # ruta relativa a native/ para que `sha256sum -c SHA256SUMS` funcione
+          # desde ese directorio (install.sh --native lo valida así)
+          ( cd native && sha256sum libopentui.android-arm64.so > SHA256SUMS )
+          cat native/SHA256SUMS
           file native/libopentui.android-arm64.so
           readelf -d native/libopentui.android-arm64.so | grep -E "NEEDED|SONAME"
           {

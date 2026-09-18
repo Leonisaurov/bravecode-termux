@@ -83,26 +83,34 @@ class InstallScript(unittest.TestCase):
         self.assertTrue(TARGET_LIB.exists())
         self.assertEqual(NATIVE_LIB.read_bytes(), TARGET_LIB.read_bytes())
 
-    def test_patch_breaks_hardlink_to_bun_cache(self):
-        """bun enlaza node_modules al cache con hardlinks: --patch debe escribir
-        un archivo nuevo (rm + cp), no seguir el enlace y contaminar el cache."""
+    def test_patch_replaces_cache_symlink_without_touching_cache(self):
+        """bun enlaza los archivos de node_modules al cache con **symlinks** (en
+        Android/SELinux no se pueden crear hardlinks: `ln` falla con Permission
+        denied). `--patch` debe escribir un archivo nuevo (rm + cp): con sólo
+        `cp -f` escribiría a través del symlink y contaminaría el cache."""
         if not NATIVE_LIB.exists():
             self.skipTest("lib nativa aún no descargada del CI")
-        with tempfile.TemporaryDirectory() as tmp:
-            link = pathlib.Path(tmp) / "cache-copy.so"
-            if TARGET_LIB.exists():
-                shutil.copy2(TARGET_LIB, link)
-            else:
-                link.write_bytes(b"placeholder")
-            if TARGET_LIB.exists():
+        target_dir = TARGET_LIB.parent
+        cache_file = target_dir / "cache-target-test.so"
+        placeholder = b"contenido original del cache\n"
+        try:
+            if TARGET_LIB.exists() or TARGET_LIB.is_symlink():
                 os.unlink(TARGET_LIB)
-            # hardlink explícito con ln: Android/Python no expone os.link
-            subprocess.run(["ln", str(link), str(TARGET_LIB)], check=True)
-            before = link.read_bytes()
+            cache_file.write_bytes(placeholder)
+            os.symlink(cache_file, TARGET_LIB)  # como lo hace bun
             p = run_install("--patch")
             if p.returncode != 0:
                 self.skipTest(f"la lib nativa no pasa el verificador todavía: {p.stderr.strip()[:80]}")
-            self.assertEqual(before, link.read_bytes(), "--patch modificó el archivo enlazado (cache de bun)")
+            self.assertFalse(os.path.islink(TARGET_LIB), "--patch dejó el symlink al cache")
+            self.assertEqual(
+                cache_file.read_bytes(), placeholder, "--patch escribió a través del symlink (cache contaminado)"
+            )
+            self.assertEqual(TARGET_LIB.read_bytes(), NATIVE_LIB.read_bytes())
+        finally:
+            if cache_file.exists():
+                os.unlink(cache_file)
+            if not TARGET_LIB.exists() and NATIVE_LIB.exists():
+                shutil.copy2(NATIVE_LIB, TARGET_LIB)
 
     def test_bin_installs_launcher_with_rewritten_shebang(self):
         with tempfile.TemporaryDirectory() as tmp:
