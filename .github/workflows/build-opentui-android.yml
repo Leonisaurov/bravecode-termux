@@ -77,10 +77,10 @@ jobs:
         env:
           ZIG_BIN: ${{ github.workspace }}/build/zig/zig
           ANDROID_NDK_HOME: ${{ github.workspace }}/build/android-ndk
-        run: ci/build-opentui-android.sh
+        run: bash ci/build-opentui-android.sh
 
       - name: Verify native library
-        run: ci/verify-libopentui.sh native/libopentui.android-arm64.so
+        run: bash ci/verify-libopentui.sh native/libopentui.android-arm64.so
 
       - name: Checksums and summary
         run: |
