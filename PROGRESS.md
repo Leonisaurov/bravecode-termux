@@ -53,6 +53,7 @@ librería nativa vive ahí).
 | 3 | `miniaudio.h: 'pthread.h' not found` (translate-c sin headers) | parche `ci/patch-opentui-android-translate-c.py` (includes del NDK) |
 | 4 | `build.zig: root source file struct 'process' has no member named 'getEnvVarOwned'` | opciones del build (`-Dndk-include`, `-Dndk-arch-include`) |
 | 5 | `panic: Option 'ndk-include' declared twice` | el helper cachea las rutas (se llama una vez por translate-c) |
+| 6 | `unable to find dynamic system library 'dl'/'pthread'/'m' ... searched paths: none` | en Android el módulo recibe el library path del NDK (`-Dndk-lib`) y se linkea sólo `m`; Bionic no tiene `libpthread`/`libdl` |
 
 Diagnóstico previo hecho en local con el device (zig 0.16.0 + NDK r29): el
 translate-c de OpenTUI no hereda el `--libc`, y al apuntarlo al NDK aparece el
