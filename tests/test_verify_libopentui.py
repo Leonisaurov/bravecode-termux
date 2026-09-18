@@ -73,6 +73,17 @@ class VerifyLibOpenTui(unittest.TestCase):
         self.assertIn("embeddedTerminalWrite", r.stdout + r.stderr)
         self.assertIn("clipboardServiceCreate", r.stdout + r.stderr)
 
+    def test_glibc_lib_is_rejected(self):
+        """La .so glibc del paquete (0.5.9 oficial) tiene los 397 símbolos, pero
+        el linker de Android no puede cargarla: el verificador debe distinguirla
+        por sus NEEDED (libc.so.6) y salir con 6."""
+        glibc_lib = ROOT / "app" / "node_modules" / "@opentui" / "core-linux-arm64" / "libopentui.so"
+        if not glibc_lib.exists():
+            self.skipTest("no hay lib glibc de referencia (bun install)")
+        r = run_verify(glibc_lib)
+        self.assertEqual(r.returncode, 6, r.stdout + r.stderr)
+        self.assertIn("glibc", (r.stdout + r.stderr).lower())
+
     @unittest.skipUnless(
         (ROOT / "native" / "libopentui.android-arm64.so").exists(),
         "lib nativa 0.5.9 aún no descargada del CI",

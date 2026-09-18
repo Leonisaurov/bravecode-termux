@@ -57,6 +57,20 @@ if ! printf '%s\n' "$DYNAMIC" | grep -q 'NEEDED.*libc\.so'; then
     exit 4
 fi
 
+# glibc vs Bionic: un binario/so enlazado contra glibc pide libc.so.6,
+# libm.so.6, libpthread.so.0... El linker de Android sólo resuelve los nombres
+# de Bionic (libc.so, libm.so). Así se distingue la .so oficial de Linux que
+# publica @opentui/core de la que compilamos para Android.
+GLIBC_DEPS="$(printf '%s\n' "$DYNAMIC" \
+    | grep NEEDED \
+    | grep -oE '\[[^]]+\]' \
+    | tr -d '[]' \
+    | grep -E '^(libc|libm|libdl|librt|libpthread|libstdc\+\+|libgcc_s)\.so\.' || true)"
+if [ -n "$GLIBC_DEPS" ]; then
+    echo "error: '$LIB' está enlazada contra glibc y no contra Bionic ($(printf '%s' "$GLIBC_DEPS" | tr '\n' ' ')); el linker de Android no puede cargarla" >&2
+    exit 6
+fi
+
 if [ ! -f "$REQUIRED" ]; then
     echo "error: falta la lista de símbolos requeridos '$REQUIRED'" >&2
     exit 1

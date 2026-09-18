@@ -126,12 +126,12 @@ fi
 # --- 3.5 parche del build.zig: los translate-c necesitan los headers del NDK
 # (si no, 'pthread.h'/'math.h' not found; ver ci/patch-opentui-android-translate-c.py)
 python3 "$REPO_ROOT/ci/patch-opentui-android-translate-c.py" "$NATIVE_DIR/build.zig"
-export BRAVECODE_NDK_INCLUDE="$SYSROOT/usr/include"
-export BRAVECODE_NDK_ARCH_INCLUDE="$SYSROOT/usr/include/$ANDROID_TRIPLE"
-for d in "$BRAVECODE_NDK_INCLUDE" "$BRAVECODE_NDK_ARCH_INCLUDE"; do
+NDK_INCLUDE="$SYSROOT/usr/include"
+NDK_ARCH_INCLUDE="$SYSROOT/usr/include/$ANDROID_TRIPLE"
+for d in "$NDK_INCLUDE" "$NDK_ARCH_INCLUDE"; do
     [ -d "$d" ] || die "el NDK no aporta el include '$d'"
 done
-log "translate-c incluirá: $BRAVECODE_NDK_INCLUDE $BRAVECODE_NDK_ARCH_INCLUDE"
+log "translate-c incluirá: $NDK_INCLUDE $NDK_ARCH_INCLUDE"
 
 # --- 4. build
 export ZIG_LOCAL_CACHE_DIR="${ZIG_LOCAL_CACHE_DIR:-$WORK_DIR/cache/zig}"
@@ -143,6 +143,8 @@ log "zig build (release, target $OPENTUI_TARGET)"
 ( cd "$NATIVE_DIR" && "$ZIG_BIN" build \
     -Dlibrary-target="$OPENTUI_TARGET" \
     -Doptimize="$OPENTUI_OPTIMIZE" \
+    -Dndk-include="$NDK_INCLUDE" \
+    -Dndk-arch-include="$NDK_ARCH_INCLUDE" \
     --libc "$LIBC_FILE" \
     --prefix "$PREFIX" \
     --cache-dir "$ZIG_LOCAL_CACHE_DIR" \

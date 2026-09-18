@@ -35,6 +35,17 @@ class TuiSmoke(unittest.TestCase):
     def setUpClass(cls):
         if not PLATFORM_LIB.exists():
             raise unittest.SkipTest("lib nativa no instalada (install.sh --native --patch)")
+        # Sólo tiene sentido probar la TUI con la lib Android: si en
+        # node_modules sigue la .so glibc del paquete, bun:ffi no puede cargarla.
+        r = subprocess.run(
+            ["bash", str(ROOT / "ci" / "verify-libopentui.sh"), str(PLATFORM_LIB)],
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode != 0:
+            raise unittest.SkipTest(
+                f"la lib aplicada no es la de Android todavía ({r.stdout.strip().splitlines()[-1] if r.stdout.strip() else r.returncode})"
+            )
 
     def tearDown(self):
         if TMUX:
