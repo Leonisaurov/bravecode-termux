@@ -128,10 +128,12 @@ fi
 python3 "$REPO_ROOT/ci/patch-opentui-android-translate-c.py" "$NATIVE_DIR/build.zig"
 NDK_INCLUDE="$SYSROOT/usr/include"
 NDK_ARCH_INCLUDE="$SYSROOT/usr/include/$ANDROID_TRIPLE"
-for d in "$NDK_INCLUDE" "$NDK_ARCH_INCLUDE"; do
-    [ -d "$d" ] || die "el NDK no aporta el include '$d'"
+NDK_LIB="$SYSROOT/usr/lib/$ANDROID_TRIPLE/$ANDROID_API"
+for d in "$NDK_INCLUDE" "$NDK_ARCH_INCLUDE" "$NDK_LIB"; do
+    [ -d "$d" ] || die "el NDK no aporta '$d'"
 done
 log "translate-c incluirá: $NDK_INCLUDE $NDK_ARCH_INCLUDE"
+log "link buscará las libs en: $NDK_LIB (Bionic no tiene libpthread/libdl)"
 
 # --- 4. build
 export ZIG_LOCAL_CACHE_DIR="${ZIG_LOCAL_CACHE_DIR:-$WORK_DIR/cache/zig}"
@@ -145,6 +147,7 @@ log "zig build (release, target $OPENTUI_TARGET)"
     -Doptimize="$OPENTUI_OPTIMIZE" \
     -Dndk-include="$NDK_INCLUDE" \
     -Dndk-arch-include="$NDK_ARCH_INCLUDE" \
+    -Dndk-lib="$NDK_LIB" \
     --libc "$LIBC_FILE" \
     --prefix "$PREFIX" \
     --cache-dir "$ZIG_LOCAL_CACHE_DIR" \

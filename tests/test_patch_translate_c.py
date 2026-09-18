@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """Tests del parche del build.zig de OpenTUI para Android.
 
-Contexto: en `packages/native/build.zig`, los pasos `addTranslateC` (miniaudio y
-yoga) no heredan el `--libc` que el script de build le pasa a `zig build`, así
-que Zig no encuentra los headers de Bionic (`pthread.h`, `math.h`) y el build de
-Android falla en `translate-c`. Además, al apuntarlos al NDK aparece
-`sys/time.h: error: nullability specifier cannot be applied to non-pointer type`
-porque los headers de Bionic usan `_Nullable`/`_Nonnull` de clang.
+Tres fallos reales del CI, los tres reproducidos en local antes de arreglarlos:
 
-El parche inserta, sólo cuando el target es Android, los include dirs del NDK
-(pasados como `-Dndk-include` / `-Dndk-arch-include`) y anula esas tres macros.
-Es idempotente, actualiza versiones previas del propio parche y falla en vez de
-seguir adelante si no encuentra el ancla.
+ 1. `addTranslateC` no hereda el `--libc` de `zig build` -> headers de Bionic
+    ausentes (`miniaudio.h:3883: 'pthread.h' not found`).
+ 2. Al apuntarlos al NDK -> `sys/time.h:47: error: nullability specifier cannot
+    be applied to non-pointer type` (clang `_Nullable` sobre arrays).
+ 3. El link pide `dl`/`pthread` (no existen en Bionic) y no encuentra `m`
+    (`searched paths: none`); con `-L <ndk lib dir>` sí.
 
-Nota: se usan `b.option` y no variables de entorno porque en Zig 0.16
-`std.process.getEnvVarOwned` ya no existe (falló así en CI).
+El parche (sólo en Android) añade los include dirs del NDK y las macros de
+nullability a los translate-c, y el library path del NDK + sólo `m` al link.
+Es idempotente, actualiza versiones previas del parche y falla si cambian las
+anclas. Usa `b.option` (Zig 0.16 no tiene `std.process.getEnvVarOwned` ni
+`std.posix.getenv`) y cachea las lecturas (`b.option` paniquea si se declara dos
+veces y las funciones se llaman una vez por paso/módulo).
 """
 import pathlib
 import shutil
@@ -34,6 +35,7 @@ def find_zig():
     if local.exists():
         return str(local)
     return shutil.which("zig")
+
 
 FIXTURE = """\
 fn addTranslatedCImports(
@@ -56,9 +58,29 @@ fn addTranslatedCImports(
     yoga_translate.addIncludePath(yoga_dep.path(""));
     module.addImport("yoga", yoga_translate.createModule());
 }
+
+fn addNativeAudioDependencies(
+    b: *std.Build,
+    module: *std.Build.Module,
+    target: std.Build.ResolvedTarget,
+    macos_sdk_path: ?[]const u8,
+) void {
+    addMiniaudioShim(b, module, target, macos_sdk_path);
+    addImageShim(b, module, target, macos_sdk_path);
+
+    switch (target.result.os.tag) {
+        .macos => addMacOSSystemLibraries(b, module, macos_sdk_path.?),
+        .linux => {
+            module.linkSystemLibrary("dl", .{});
+            module.linkSystemLibrary("pthread", .{});
+            module.linkSystemLibrary("m", .{});
+        },
+        else => {},
+    }
+}
 """
 
-# Versión anterior del parche (leía variables de entorno): debe ser reemplazada.
+# Versión anterior del parche (leía variables de entorno): debe reemplazarse.
 V1_HELPER = (
     "\n// [bravecode-termux] versión vieja del parche\n"
     "fn addAndroidNdkIncludes(b: *std.Build, step: *std.Build.Step.TranslateC) void {\n"
@@ -86,16 +108,22 @@ class PatchTranslateC(unittest.TestCase):
             out = f.read_text()
             self.assertIn('"ndk-include"', out)
             self.assertIn('"ndk-arch-include"', out)
+            self.assertIn('"ndk-lib"', out)
             self.assertIn("b.option", out)
             self.assertIn("brave_ndk_include_paths", out, "las opciones deben leerse una sola vez")
             self.assertIn("if (brave_ndk_include_paths == null)", out)
             self.assertIn("addSystemIncludePath", out)
+            self.assertIn("addLibraryPath", out)
             self.assertIn('_Nullable=', out)
             self.assertIn('_Nonnull=', out)
             self.assertIn("abi == .android", out)
             self.assertIn("addAndroidNdkIncludes(b, miniaudio_translate)", out)
             self.assertIn("addAndroidNdkIncludes(b, yoga_translate)", out)
+            self.assertIn("addAndroidNdkLibraryPath(b, module)", out)
             self.assertNotIn("getEnvVarOwned", out, "Zig 0.16 no tiene esa API")
+            # Linux sigue linkeando dl/pthread en la rama no-Android
+            self.assertIn('module.linkSystemLibrary("dl", .{})', out)
+            self.assertIn('module.linkSystemLibrary("pthread", .{})', out)
 
     def test_is_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -111,13 +139,13 @@ class PatchTranslateC(unittest.TestCase):
         """El caché de CI puede traer un árbol con el parche viejo."""
         with tempfile.TemporaryDirectory() as tmp:
             f = pathlib.Path(tmp) / "build.zig"
-            f.write_text(FIXTURE.replace("}\n", "}\n", 1) + V1_HELPER)
+            f.write_text(FIXTURE + V1_HELPER)
             p = run_patcher(f)
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             out = f.read_text()
             self.assertNotIn("getEnvVarOwned", out)
-            self.assertEqual(out.count("addAndroidNdkIncludes"), 3, "helper o llamadas duplicadas")
-            # y sigue siendo idempotente tras la actualización
+            self.assertEqual(out.count("fn addAndroidNdkIncludes"), 1, "helper duplicado")
+            self.assertEqual(out.count("addAndroidNdkIncludes(b,"), 2, "llamadas duplicadas")
             run_patcher(f)
             self.assertEqual(out, f.read_text())
 
@@ -130,10 +158,19 @@ class PatchTranslateC(unittest.TestCase):
             self.assertNotEqual(p.returncode, 0)
             self.assertIn("ancla", (p.stdout + p.stderr).lower())
 
+    def test_fails_when_only_link_anchor_missing(self):
+        """Cada ancla se verifica por separado."""
+        with tempfile.TemporaryDirectory() as tmp:
+            f = pathlib.Path(tmp) / "build.zig"
+            f.write_text(FIXTURE.replace('            module.linkSystemLibrary("dl", .{});\n', ""))
+            p = run_patcher(f)
+            self.assertNotEqual(p.returncode, 0)
+            self.assertIn("link de sistema", p.stdout + p.stderr)
+
     @unittest.skipUnless(find_zig(), "zig no disponible")
     def test_helper_compiles_and_reads_options_once(self):
-        """Reproduce el fallo de CI en local: el helper debe compilar con zig y
-        llamarse dos veces sin 'panic: Option ndk-include declared twice'."""
+        """Reproduce los fallos de CI en local (en segundos): el helper debe
+        compilar con zig y llamarse varias veces sin 'declared twice'."""
         zig = find_zig()
         build_main = (
             "\nconst std = @import(\"std\");\n"
@@ -146,21 +183,47 @@ class PatchTranslateC(unittest.TestCase):
             "    });\n"
             "    addAndroidNdkIncludes(b, step);\n"
             "    addAndroidNdkIncludes(b, step);\n"
+            "    const mod = b.createModule(.{\n"
+            "        .root_source_file = b.path(\"foo.c\"),\n"
+            "        .target = target,\n"
+            "        .optimize = .Debug,\n"
+            "    });\n"
+            "    addAndroidNdkLibraryPath(b, mod);\n"
+            "    addAndroidNdkLibraryPath(b, mod);\n"
             "}\n"
         )
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = pathlib.Path(tmp)
             (tmp_path / "foo.h").write_text("int f(void);\n")
+            (tmp_path / "foo.c").write_text("int f(void) { return 1; }\n")
             f = tmp_path / "build.zig"
             f.write_text(FIXTURE)
             self.assertEqual(run_patcher(f).returncode, 0)
-            f.write_text(f.read_text() + build_main)
+            # el fixture trae llamadas a helpers de OpenTUI que no definimos:
+            # fuera, para que el build.zig de prueba compile aislado
+            text = f.read_text()
+            text = text.replace(
+                "    addMiniaudioShim(b, module, target, macos_sdk_path);\n",
+                "    _ = macos_sdk_path;\n",
+            )
+            for line in (
+                "    addImageShim(b, module, target, macos_sdk_path);\n",
+                "        .macos => addMacOSSystemLibraries(b, module, macos_sdk_path.?),\n",
+            ):
+                text = text.replace(line, "")
+            f.write_text(text + build_main)
             p = subprocess.run(
-                [zig, "build", "-Dndk-include=/tmp/include", "-Dndk-arch-include=/tmp/arch"],
+                [
+                    zig,
+                    "build",
+                    "-Dndk-include=/tmp/include",
+                    "-Dndk-arch-include=/tmp/arch",
+                    "-Dndk-lib=/tmp/lib",
+                ],
                 cwd=tmp,
                 capture_output=True,
                 text=True,
-                timeout=180,
+                timeout=300,
             )
             self.assertNotIn("declared twice", p.stderr + p.stdout)
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -174,10 +237,12 @@ class PatchTranslateC(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         after = REAL_BUILD_ZIG.read_text()
         self.assertIn("addAndroidNdkIncludes", after)
+        self.assertIn("addAndroidNdkLibraryPath", after)
         self.assertNotIn("getEnvVarOwned", after)
         run_patcher(REAL_BUILD_ZIG)
         self.assertEqual(after, REAL_BUILD_ZIG.read_text())
         self.assertEqual(after.count("fn addAndroidNdkIncludes"), 1)
+        self.assertEqual(after.count("fn addAndroidNdkLibraryPath"), 1)
         if not already:
             self.assertNotEqual(before, after, "el parche no cambió el build.zig real")
 
