@@ -1,0 +1,33 @@
+{
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.41",
+    "@ai-sdk/google": "^4.0.50",
+    "@ai-sdk/mistral": "^4.0.32",
+    "@ai-sdk/openai": "^4.0.46",
+    "@ai-sdk/openai-compatible": "^3.0.36",
+    "@opentui/core": "0.5.9",
+    "@opentui/core-linux-arm64": "0.5.9",
+    "@opentui/react": "0.5.9",
+    "ai": "^7.0.78",
+    "bun-ffi-structs": "0.3.1",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0",
+    "diff": "9.0.0",
+    "ink": "^7.1.1",
+    "ink-text-input": "^6.0.0",
+    "inquirer": "^12.6.0",
+    "marked": "^15.0.7",
+    "marked-terminal": "^7.3.0",
+    "minimatch": "^10.0.3",
+    "ora": "^8.2.0",
+    "react": "^19.2.8",
+    "react-reconciler": "^0.33.0",
+    "string-width": "^7.2.0",
+    "strip-ansi": "^7.1.2",
+    "ws": "^8.18.0",
+    "zod": "^3.25.67"
+  },
+  "description": "node_modules de bravecode-cli para el port de Termux/Android",
+  "name": "bravecode-termux-app",
+  "private": true
+}

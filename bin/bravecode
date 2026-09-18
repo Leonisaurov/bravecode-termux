@@ -1,0 +1,43 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# Launcher de BraveCode para Termux/Android.
+#
+#   ./bin/bravecode              -> TUI (requiere la lib nativa: install.sh --native)
+#   ./bin/bravecode --help       -> ayuda / subcomandos que no usan la TUI
+#
+# Respeta el directorio de trabajo: el CLI trabaja sobre el proyecto del usuario,
+# no sobre el árbol del port.
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+APP_DIR=${BRAVECODE_APP_DIR:-$ROOT/app}
+export BRAVECODE_APP_DIR="$APP_DIR"
+
+if [ ! -d "$APP_DIR/node_modules/bravecode-cli" ]; then
+    echo "bravecode: faltan las dependencias JS en $APP_DIR/node_modules." >&2
+    echo "           ejecuta: ./install.sh --deps" >&2
+    exit 3
+fi
+
+if [ -n "${BRAVECODE_BUN:-}" ]; then
+    BUN="$BRAVECODE_BUN"
+else
+    BUN=$(command -v bun 2>/dev/null || true)
+fi
+if [ -z "${BUN:-}" ]; then
+    echo "bravecode: no encuentro 'bun' en PATH (el CLI exige el runtime de Bun)." >&2
+    echo "           instálalo (pkg install bun) o define BRAVECODE_BUN=/ruta/a/bun" >&2
+    exit 127
+fi
+
+# Termux define TMPDIR; otros entornos no, y el CLI lo usa para spool temporal.
+if [ -z "${TMPDIR:-}" ]; then
+    if [ -n "${PREFIX:-}" ]; then
+        TMPDIR="$PREFIX/tmp"
+    else
+        TMPDIR="${HOME:-.}/.cache/bravecode/tmp"
+    fi
+    export TMPDIR
+    mkdir -p "$TMPDIR" 2>/dev/null || true
+fi
+
+exec "$BUN" "$ROOT/runtime/launch.cjs" "$@"

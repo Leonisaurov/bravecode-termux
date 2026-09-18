@@ -1,30 +1,30 @@
 name: Build libopentui.so (Android ARM64)
 
-# Compila la librería nativa de OpenTUI que el port de BraveCode necesita en
-# Termux/Android. El paquete npm de @opentui/core no publica binarios Android y
-# la receta validada en ../opencode-termux sólo cubre la 0.4.5; BraveCode usa
-# 0.5.9 (397 símbolos FFI), así que se compila aquí desde la fuente upstream.
+# Compila la librería nativa de OpenTUI que necesita el port de BraveCode en
+# Termux/Android: @opentui/core no publica binarios Android, y los de Linux
+# (glibc) no los puede cargar el linker de Bionic.
+#
+# Receta portada del pipeline validado en ../opencode-termux
+# (opentui/scripts/build-opentui.sh): Zig + NDK Bionic descrito por
+# ci/build-opentui-android.sh a través de un `--libc` (android-libc.txt).
+# La librería resultante se verifica con ci/verify-libopentui.sh, que exige
+# ELF AArch64, NEEDED libc.so y los 397 símbolos FFI de @opentui/core 0.5.9.
 
 on:
   workflow_dispatch:
     inputs:
       opentui_ref:
-        description: "Ref/tag de OpenTUI a compilar"
+        description: "Ref de OpenTUI a compilar (tag/commit)"
         required: false
         default: "v0.5.9"
-        type: string
       optimize:
         description: "Modo de optimización de Zig"
         required: false
         default: "ReleaseSafe"
-        type: choice
-        options: [ReleaseSafe, ReleaseFast, ReleaseSmall, Debug]
   push:
     branches: [main]
     paths:
-      - "ci/build-opentui-android.sh"
-      - "ci/verify-libopentui.sh"
-      - "ci/required-symbols.txt"
+      - "ci/**"
       - ".github/workflows/build-opentui-android.yml"
 
 permissions:
@@ -32,12 +32,10 @@ permissions:
 
 env:
   ZIG_VERSION: "0.16.0"
-  ANDROID_NDK_VERSION: "28.1.13356709"
-  ANDROID_NDK_HOME: /opt/android-ndk
   ANDROID_API: "24"
   OPENTUI_TARGET: aarch64-linux-android.24
-  OPENTUI_REF: ${{ github.event.inputs.opentui_ref || 'v0.5.9' }}
-  OPENTUI_OPTIMIZE: ${{ github.event.inputs.optimize || 'ReleaseSafe' }}
+  OPENTUI_REF: ${{ inputs.opentui_ref || 'v0.5.9' }}
+  OPENTUI_OPTIMIZE: ${{ inputs.optimize || 'ReleaseSafe' }}
 
 jobs:
   build-opentui:
@@ -45,84 +43,71 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Cache Android NDK
-        id: ndk-cache
-        uses: actions/cache@v4
-        with:
-          path: /opt/android-ndk
-          key: android-ndk-${{ env.ANDROID_NDK_VERSION }}-linux-x86_64
-
-      - name: Install Android NDK
-        if: steps.ndk-cache.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          curl -fL --retry 3 --retry-delay 2 -o "$RUNNER_TEMP/ndk.zip" \
-            https://dl.google.com/android/repository/android-ndk-r28b-linux.zip
-          sudo mkdir -p /opt/android-ndk
-          sudo unzip -q "$RUNNER_TEMP/ndk.zip" -d "$RUNNER_TEMP/ndk"
-          sudo mv "$RUNNER_TEMP/ndk/android-ndk-r28b/." /opt/android-ndk/
-          ls /opt/android-ndk/toolchains/llvm/prebuilt
-
-      - name: Cache Zig
-        id: zig-cache
-        uses: actions/cache@v4
-        with:
-          path: /opt/zig
-          key: zig-${{ env.ZIG_VERSION }}-x86_64-linux
-
-      - name: Install Zig
-        if: steps.zig-cache.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          curl -fL --retry 3 --retry-delay 2 -o "$RUNNER_TEMP/zig.tar.xz" \
-            "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
-          sudo mkdir -p /opt/zig
-          sudo tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C /opt/zig --strip-components=1
-          /opt/zig/zig version
-
-      - name: Cache OpenTUI source + Zig deps
+      - name: Cache OpenTUI source + Zig caches
         uses: actions/cache@v4
         with:
           path: |
             build/opentui-src
             build/cache
-          key: opentui-${{ env.OPENTUI_REF }}-${{ hashFiles('ci/build-opentui-android.sh') }}
+          key: opentui-${{ env.OPENTUI_REF }}-${{ hashFiles('ci/build-opentui-android.sh', 'ci/verify-libopentui.sh', 'ci/required-symbols.txt') }}
           restore-keys: |
             opentui-${{ env.OPENTUI_REF }}-
 
-      - name: Build libopentui.so for Android aarch64
-        env:
-          ZIG_BIN: /opt/zig/zig
-        run: ci/build-opentui-android.sh
-
-      - name: Verify library contract
-        run: ci/verify-libopentui.sh native/libopentui.android-arm64.so
-
-      - name: Summary
+      - name: Install Zig ${{ env.ZIG_VERSION }}
         run: |
           set -euo pipefail
-          LIB=native/libopentui.android-arm64.so
+          curl -fL --retry 3 --retry-delay 2 -o "$RUNNER_TEMP/zig.tar.xz" \
+            "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          mkdir -p build/zig
+          tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C build/zig --strip-components=1
+          build/zig/zig version
+
+      - name: Install Android NDK r28b
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 --retry-delay 2 -o "$RUNNER_TEMP/ndk.zip" \
+            "https://dl.google.com/android/repository/android-ndk-r28b-linux.zip"
+          unzip -q "$RUNNER_TEMP/ndk.zip" -d build
+          mv build/android-ndk-r28b build/android-ndk
+          ls build/android-ndk/toolchains/llvm/prebuilt
+
+      - name: Build libopentui.so (Android aarch64)
+        env:
+          ZIG_BIN: ${{ github.workspace }}/build/zig/zig
+          ANDROID_NDK_HOME: ${{ github.workspace }}/build/android-ndk
+        run: ci/build-opentui-android.sh
+
+      - name: Verify native library
+        run: ci/verify-libopentui.sh native/libopentui.android-arm64.so
+
+      - name: Checksums and summary
+        run: |
+          set -euo pipefail
+          sha256sum native/libopentui.android-arm64.so | tee native/SHA256SUMS
+          file native/libopentui.android-arm64.so
+          readelf -d native/libopentui.android-arm64.so | grep -E "NEEDED|SONAME"
           {
-            echo "### libopentui.so (Android aarch64)"
+            echo "### libopentui.so (Android aarch64) listo"
             echo
             echo "- OpenTUI ref: \`${OPENTUI_REF}\`"
-            echo "- Zig: \`${ZIG_VERSION}\` | NDK: \`${ANDROID_NDK_VERSION}\` | API: \`${ANDROID_API}\`"
-            echo "- Tamaño: \`$(du -h "$LIB" | cut -f1)\`"
-            echo "- SHA-256: \`$(sha256sum "$LIB" | cut -d' ' -f1)\`"
+            echo "- target Zig: \`${OPENTUI_TARGET}\` (NDK r28b, API ${ANDROID_API})"
+            echo "- optimización: \`${OPENTUI_OPTIMIZE}\`"
+            echo "- tamaño: $(du -h native/libopentui.android-arm64.so | cut -f1)"
             echo
             echo '```'
-            readelf -h "$LIB" | grep -E 'Class|Machine|Type'
-            readelf -d "$LIB" | grep -E 'NEEDED|SONAME'
+            sha256sum native/libopentui.android-arm64.so
+            readelf -d native/libopentui.android-arm64.so | grep -E "NEEDED|SONAME"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload artifact
+      - name: Upload libopentui.so
         uses: actions/upload-artifact@v4
         with:
-          name: libopentui-android-arm64-${{ env.OPENTUI_REF }}
-          path: native/libopentui.android-arm64.so
+          name: libopentui-android-arm64
+          path: |
+            native/libopentui.android-arm64.so
+            native/SHA256SUMS
           if-no-files-found: error
           retention-days: 30

@@ -96,10 +96,20 @@ log "libc.txt: $LIBC_FILE"
 # --- 2. fuente de OpenTUI en el ref pedido
 mkdir -p "$WORK_DIR"
 if [ -d "$SRC_DIR/.git" ]; then
-    log "fuente ya presente; checkout $OPENTUI_REF"
-    git -C "$SRC_DIR" fetch --depth 1 origin "$OPENTUI_REF" >/dev/null 2>&1 || true
-    git -C "$SRC_DIR" checkout --detach "$OPENTUI_REF" >/dev/null 2>&1 || true
-else
+    have="$(git -C "$SRC_DIR" rev-parse HEAD 2>/dev/null || true)"
+    want="$(git -C "$SRC_DIR" rev-parse --verify --quiet "$OPENTUI_REF^{commit}" 2>/dev/null || true)"
+    if [ -n "$want" ] && [ "$want" = "$have" ]; then
+        log "fuente ya en $OPENTUI_REF ($have)"
+    else
+        log "fuente presente en $have; checkout $OPENTUI_REF"
+        if ! git -C "$SRC_DIR" fetch --depth 1 --force origin "$OPENTUI_REF" >/dev/null 2>&1 \
+           || ! git -C "$SRC_DIR" checkout --detach FETCH_HEAD >/dev/null 2>&1; then
+            log "no pude mover el árbol al ref pedido; re-clonando"
+            rm -rf "$SRC_DIR"
+        fi
+    fi
+fi
+if [ ! -d "$SRC_DIR/.git" ]; then
     log "clonando $OPENTUI_REPO ($OPENTUI_REF)"
     git clone --depth 1 --branch "$OPENTUI_REF" "$OPENTUI_REPO" "$SRC_DIR"
 fi
@@ -128,8 +138,12 @@ log "zig build (release, target $OPENTUI_TARGET)"
     --cache-dir "$ZIG_LOCAL_CACHE_DIR" \
     --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR" )
 
-BUILT="$(find "$WORK_DIR/lib" -name libopentui.so -type f 2>/dev/null | head -n1 || true)"
-[ -n "$BUILT" ] || die "no se generó libopentui.so bajo $WORK_DIR/lib"
+BUILT="$(find "$WORK_DIR/lib" "$PREFIX" -name libopentui.so -type f 2>/dev/null | head -n1 || true)"
+if [ -z "$BUILT" ]; then
+    log "no hay libopentui.so en $WORK_DIR/lib; candidatos encontrados:"
+    find "$WORK_DIR" -name 'libopentui.so' -type f 2>/dev/null | head -n 5 >&2 || true
+    die "no se generó libopentui.so bajo $WORK_DIR/lib"
+fi
 mkdir -p "$(dirname "$OUT_LIB")"
 cp -f "$BUILT" "$OUT_LIB"
 log "artefacto: $OUT_LIB ($(du -h "$OUT_LIB" | cut -f1))"
