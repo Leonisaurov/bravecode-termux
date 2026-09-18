@@ -1,0 +1,16 @@
+# Árbol de build local (fuente de OpenTUI, caches de Zig, android-libc.txt generado)
+build/
+
+# Dependencias JS y paquete npm extraído: los provee install.sh
+app/node_modules/
+app/package/
+app/*.tgz
+
+# Artefacto nativo: lo provee el CI (install.sh --native) o install.sh --fetch
+native/*.so
+
+# Restos de Python / caches
+__pycache__/
+*.pyc
+.cache/
+*.log
