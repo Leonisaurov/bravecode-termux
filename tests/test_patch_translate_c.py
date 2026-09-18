@@ -17,6 +17,7 @@ Nota: se usan `b.option` y no variables de entorno porque en Zig 0.16
 `std.process.getEnvVarOwned` ya no existe (falló así en CI).
 """
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,14 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PATCHER = ROOT / "ci" / "patch-opentui-android-translate-c.py"
 REAL_BUILD_ZIG = ROOT / "build" / "opentui-0.5.9" / "packages" / "native" / "build.zig"
+
+
+def find_zig():
+    """El helper está escrito para zig 0.16 (el que usa el CI)."""
+    local = pathlib.Path.home() / ".local" / "opt" / "zig-0.16.0" / "bin" / "zig"
+    if local.exists():
+        return str(local)
+    return shutil.which("zig")
 
 FIXTURE = """\
 fn addTranslatedCImports(
@@ -78,6 +87,8 @@ class PatchTranslateC(unittest.TestCase):
             self.assertIn('"ndk-include"', out)
             self.assertIn('"ndk-arch-include"', out)
             self.assertIn("b.option", out)
+            self.assertIn("brave_ndk_include_paths", out, "las opciones deben leerse una sola vez")
+            self.assertIn("if (brave_ndk_include_paths == null)", out)
             self.assertIn("addSystemIncludePath", out)
             self.assertIn('_Nullable=', out)
             self.assertIn('_Nonnull=', out)
@@ -118,6 +129,41 @@ class PatchTranslateC(unittest.TestCase):
             p = run_patcher(f)
             self.assertNotEqual(p.returncode, 0)
             self.assertIn("ancla", (p.stdout + p.stderr).lower())
+
+    @unittest.skipUnless(find_zig(), "zig no disponible")
+    def test_helper_compiles_and_reads_options_once(self):
+        """Reproduce el fallo de CI en local: el helper debe compilar con zig y
+        llamarse dos veces sin 'panic: Option ndk-include declared twice'."""
+        zig = find_zig()
+        build_main = (
+            "\nconst std = @import(\"std\");\n"
+            "pub fn build(b: *std.Build) void {\n"
+            "    const target = b.standardTargetOptions(.{});\n"
+            "    const step = b.addTranslateC(.{\n"
+            "        .root_source_file = b.path(\"foo.h\"),\n"
+            "        .target = target,\n"
+            "        .optimize = .Debug,\n"
+            "    });\n"
+            "    addAndroidNdkIncludes(b, step);\n"
+            "    addAndroidNdkIncludes(b, step);\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            (tmp_path / "foo.h").write_text("int f(void);\n")
+            f = tmp_path / "build.zig"
+            f.write_text(FIXTURE)
+            self.assertEqual(run_patcher(f).returncode, 0)
+            f.write_text(f.read_text() + build_main)
+            p = subprocess.run(
+                [zig, "build", "-Dndk-include=/tmp/include", "-Dndk-arch-include=/tmp/arch"],
+                cwd=tmp,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            self.assertNotIn("declared twice", p.stderr + p.stdout)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
 
     def test_real_build_zig_when_cloned(self):
         if not REAL_BUILD_ZIG.exists():
