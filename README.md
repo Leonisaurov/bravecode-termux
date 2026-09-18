@@ -19,7 +19,7 @@ inyecta donde el CLI la busca.
 | Comandos no interactivos | ✅ `models`, `providers`, `tools`, `agents`, `plugins`, `config` |
 | Prompt real (headless) | ✅ `bravecode run "Responde únicamente con la palabra: ok"` → `ok` |
 | TUI (OpenTUI 0.5.9) | ✅ renderiza y responde en tmux (prompt → "port ok", sidebar con tokens/MCP) |
-| Tests | ✅ `python3 tests/run-tests.py` (38 tests, stdlib) |
+| Tests | ✅ `python3 tests/run-tests.py` (40 tests, stdlib) |
 
 ## Qué hace el port
 
@@ -62,6 +62,19 @@ renderable, pero el closure lee `''`). Medido en el device: teclear `abc` emite
 `InputRenderable` para que `INPUT` emita también `CHANGE` con el mismo valor,
 con lo que el estado se sincroniza por tecla y el prompt se envía.
 
+**4. Bug de la TUI: las flechas no navegaban en el diálogo de agentes/modelos.**
+El parser de `@opentui/core` 0.5.9 nombra las flechas `up`/`down` (modo raw y
+kitty), pero la TUI del CLI compara con `arrowUp`/`arrowDown`
+(`ModelAgentDialog` en `dist/cli-main.mjs`) → el `selectedIdx` nunca se movía y
+Elegir modelo/agente con el teclado era imposible. Medido con un probe sobre
+`KeyHandler`: teclear `↓` emite un solo `keypress` con `name: "down"`.
+`runtime/opentui-input-compat.cjs` envuelve también `emit` de
+`InternalKeyHandler` (la clase que emite de verdad: `renderer.keyInput` **es**
+`renderer._internalKeyInput`, y su `emit` no delega en la clase base) para
+re-emitir la misma tecla como `arrowUp`/`arrowDown`/`arrowLeft`/`arrowRight`
+junto al evento original. Verificado en la TUI: `↓`+Enter → `plan`, `↓↓`+Enter
+→ `debug`, `↓↓↓`+Enter → `testing`.
+
 ## Requisitos
 
 - Termux aarch64 con `bun` (bionic; probado con 1.3.14), `git`, `curl`, `gh`
@@ -93,3 +106,14 @@ nativa, tmux). La TUI se prueba en tmux (`tests/test_tui.py`).
 - El arreglo del punto 3 vive en `runtime/`, no en el paquete: si algún día
   bravecode-cli cambia a `onInput` (o OpenTUI corrige la semántica de `CHANGE`),
   el shim se vuelve innecesario y hay que quitarlo (los tests lo detectan).
+- **El diálogo de agentes/modelos no repinta el resaltado** (bug del CLI, no del
+  port): `ModelAgentDialog` guarda el índice en `useRef` y lo lee en el render,
+  así que cambiar de item no dispara re-render y la fila seleccionada sigue
+  pintada en la primera. Las flechas **sí** cambian la selección (verificado con
+  Enter: `↓`→`plan`, `↓↓`→`debug`, `↓↓↓`→`testing`), pero a ciegas; además
+  `tab` resetea el índice a 0. Para elegir agente/modelo de forma visible:
+  `./bin/bravecode config agent.default <id>` / `model.default <id>` y reiniciar
+  la TUI (ids en `./bin/bravecode agents` y `models`).
+- `BRAVECODE_KEYS_DEBUG=<archivo>` hace que el shim de flechas registre cada
+  alias emitido (diagnóstico; ver `listeners=` para ver cuántos handlers tiene
+  el keyHandler).

@@ -3,7 +3,8 @@
 Port de `bravecode-cli` (CLI cerrado, bundle Node/Bun) a Termux/Android aarch64.
 El bundle externaliza React/Ink y el núcleo nativo **OpenTUI**; el port **no**
 parchea el paquete: compila OpenTUI para Android en CI, inyecta la .so donde el
-CLI la busca y corrige dos suposiciones de entorno (plataforma y eventos).
+CLI la busca y corrige tres suposiciones de entorno (plataforma, eventos del
+input y nombres de flecha).
 
 ## Estructura
 
@@ -12,7 +13,7 @@ BraveCode/
 ├── install.sh                  # --fetch npm, --deps bun, --native (artifact CI), --patch, --all, --check, --bin
 ├── bin/bravecode               # launcher (bun + shims); BRAVECODE_ROOT para la copia en $PREFIX/bin
 ├── runtime/platform-shim.cjs   # process.platform -> 'linux' (sólo eso)
-├── runtime/opentui-input-compat.cjs  # INPUT->CHANGE: la TUI pueda enviar desde su onChange
+├── runtime/opentui-input-compat.cjs  # INPUT->CHANGE + alias up/down -> arrowUp/arrowDown
 ├── runtime/launch.cjs          # aplica shims y delega en dist/cli.cjs del paquete
 ├── app/                        # node_modules (bun install) + bravecode-cli extraído (no se edita)
 ├── native/                     # libopentui.android-arm64.so + SHA256SUMS (artefacto del CI)
@@ -22,10 +23,10 @@ BraveCode/
 ├── ci/patch-opentui-android-translate-c.py  # parches del build.zig (translate-c, link, shim de Bionic)
 ├── ci/bionic-compat.c          # define pthread_tryjoin_np (glibc-only) dentro de la .so
 ├── .github/workflows/build-opentui-android.yml  # workflow que produce la .so
-└── tests/                      # 38 tests stdlib (verificador, parches, shims, launcher, install, TUI)
+└── tests/                      # 40 tests stdlib (verificador, parches, shims, launcher, install, TUI)
 ```
 
-## Causas raíz del port (tres)
+## Causas raíz del port (cuatro)
 
 1. **`process.platform === 'android'`**. `getCurrentTarget()` del bundle sólo
    acepta darwin/linux/win32 → en Termux devuelve null → nunca llama a
@@ -44,6 +45,15 @@ BraveCode/
    que su `value` está vacío mientras escribes: la paleta de `/` no abre y
    `doSubmit()` sale por `if (!value.trim()) return`. Fix:
    `runtime/opentui-input-compat.cjs` hace que `INPUT` emita también `CHANGE`.
+4. **Las flechas no navegan el diálogo de agentes/modelos**. El parser de
+   OpenTUI 0.5.9 nombra las flechas `up`/`down` (raw y kitty), pero el
+   `ModelAgentDialog` compara `arrowUp`/`arrowDown` → `selectedIdx` no se mueve.
+   Fix: el mismo shim re-emite `up/down/left/right` como
+   `arrow*` envolviendo `emit` de **`InternalKeyHandler`** (ojo: `renderer.keyInput`
+   *es* `renderer._internalKeyInput` y su `emit` no delega en `KeyHandler`; envolver
+   la clase base no intercepta nada — medido). Queda un bug del CLI sin arreglar
+   (no del port): el resaltado no se repinta porque el índice vive en un `useRef`;
+   ver "Limitaciones" en `README.md`.
 
 ## Reglas para agentes
 
@@ -63,7 +73,8 @@ BraveCode/
 - **Siempre** `python3 tests/run-tests.py` antes de dar algo por bueno. Los
   tests fijan las causas raíz: `test_glibc_lib_is_rejected` (libc.so.6 vs
   libc.so), `test_unresolved_symbols_are_reported` (pthread_tryjoin_np),
-  `test_shim_makes_change_fire_per_keystroke` (eventos del Input) y
+  `test_shim_makes_change_fire_per_keystroke` (eventos del Input),
+  `test_arrows_get_aliases_without_duplicating_normal_keys` (flechas) y
   `test_tui_renders_in_tmux` (TUI real).
 - **No instalar paquetes** (`pkg install`, `npm i -g`) sin pedirlo: `--deps`
   instala sólo dentro de `app/`.

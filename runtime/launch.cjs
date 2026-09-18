@@ -16,7 +16,7 @@
  */
 const path = require('node:path');
 const { applyPlatformShim } = require('./platform-shim.cjs');
-const { applyInputChangeShim } = require('./opentui-input-compat.cjs');
+const { applyInputChangeShim, applyKeyAliasShim } = require('./opentui-input-compat.cjs');
 
 const appDir = process.env.BRAVECODE_APP_DIR || path.join(__dirname, '..', 'app');
 const bootstrap = path.join(appDir, 'node_modules', 'bravecode-cli', 'dist', 'cli.cjs');
@@ -24,8 +24,9 @@ const bootstrap = path.join(appDir, 'node_modules', 'bravecode-cli', 'dist', 'cl
 applyPlatformShim();
 
 applyInputChangeShim()
+  .then(() => applyKeyAliasShim())
   .catch((err) => {
-    if (process.env.BRAVECODE_DEBUG) console.error('[bravecode] input-compat falló:', err && err.message);
+    if (process.env.BRAVECODE_DEBUG) console.error('[bravecode] compat falló:', err && err.message);
     return false;
   })
   .then(() => {

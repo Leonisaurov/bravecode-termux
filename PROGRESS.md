@@ -17,7 +17,8 @@ compila la librería nativa de OpenTUI para Android).
 | TUI en tmux | ✅ | renderiza (banner, input, sidebar) y responde: prompt → `port ok` |
 | Shim de plataforma | ✅ | `runtime/platform-shim.cjs` (platform=linux, arch=arm64) |
 | Compat de eventos del Input | ✅ | `runtime/opentui-input-compat.cjs` (INPUT→CHANGE) |
-| Tests | ✅ | `python3 tests/run-tests.py` (38 tests, stdlib) |
+| Compat de flechas | ✅ | mismo shim: `up/down` → `arrowUp/arrowDown`; `↓`+Enter→`plan`, `↓↓↓`+Enter→`testing` |
+| Tests | ✅ | `python3 tests/run-tests.py` (40 tests, stdlib) |
 
 ## Cómo llegamos aquí (decisiones con evidencia)
 
@@ -49,6 +50,20 @@ compila la librería nativa de OpenTUI para Android).
    ENTER llegaba al renderable pero `doSubmit()` leía `value` vacío). Se aisló
    con TestRenderer de OpenTUI (CHANGE×1 al teclear `abc`) y se arregló con un
    shim que emite `CHANGE` en cada `INPUT`.
+7. **Segundo bug de la TUI, reportado por el usuario**: "las flechas no me
+   dejan navegar entre modelos". Medido con un probe sobre el `KeyHandler` real
+   del renderer: `↓` produce **un** `keypress` con `name: "down"` — el parser de
+   OpenTUI 0.5.9 sólo usa `up/down/left/right` — pero `ModelAgentDialog` compara
+   `arrowUp`/`arrowDown`, así que `selectedIdx` nunca se movía. El primer intento
+   de shim (envolver `KeyHandler.prototype.emit`) no interceptaba nada: el
+   emisor es **`InternalKeyHandler`** y `renderer.keyInput` *es*
+   `renderer._internalKeyInput` (medido: `sameObject: true`,
+   `keyHandlerEmitSeen: 0` vs `internalEmitSeen: 1`). Con el `emit` correcto
+   envuelto, la navegación se verificó en la TUI real: 1 `↓`+Enter → `plan`,
+   2 → `debug`, 3 → `testing`. Sigue pendiente (bug del CLI, no del port) que el
+   resaltado no se repinta: el índice vive en un `useRef` y el componente no
+   re-renderiza; `tab` lo resetea a 0. Vía visible: `bravecode config
+   agent.default <id>` / `model.default <id>`.
 
 ## Iteraciones del CI (todas verificadas en el runner)
 
