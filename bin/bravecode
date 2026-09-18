@@ -8,7 +8,7 @@
 # no sobre el árbol del port.
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=${BRAVECODE_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}
 APP_DIR=${BRAVECODE_APP_DIR:-$ROOT/app}
 export BRAVECODE_APP_DIR="$APP_DIR"
 
